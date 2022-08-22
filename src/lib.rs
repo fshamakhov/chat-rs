@@ -1,6 +1,6 @@
 use std::{
     error::Error,
-    io::{stdin, ErrorKind, Read, Write},
+    io::{stdin, stdout, ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
     process, thread,
     time::Duration,
@@ -32,6 +32,8 @@ fn handle_user_input(socket: &mut TcpStream) -> Result<(), Box<dyn Error>> {
     println!("Type a message and hit Enter to send it");
 
     loop {
+        print!("message: ");
+        stdout().flush()?;
         let msg = get_input();
 
         if msg == ":quit" {
@@ -66,7 +68,10 @@ fn read_from_socket(socket: &mut TcpStream) {
             Ok(_) => {
                 let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
                 let msg = String::from_utf8(msg).expect("Invalid utf8 message");
+                println!();
                 println!("chat: {}", msg);
+                print!("message: ");
+                stdout().flush().expect("Stdout error");
             }
             Err(err) if err.kind() == ErrorKind::WouldBlock => (),
             Err(_) => {
