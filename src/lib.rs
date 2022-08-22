@@ -1,5 +1,4 @@
 use std::{
-    env,
     error::Error,
     io::{stdin, ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
@@ -9,33 +8,25 @@ use std::{
 
 const MSG_SIZE: usize = 256;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
     Server,
-    Client { host: String, port: String },
+    Client,
 }
 
-pub fn mode(mut args: impl Iterator<Item = String>) -> Result<Mode, &'static str> {
-    args.next();
+impl clap::ValueEnum for Mode {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Client, Self::Server]
+    }
 
-    let host = match args.next() {
-        Some(arg) => arg,
-        None => return Ok(Mode::Server),
-    };
-
-    let port = match args.next() {
-        Some(arg) => arg,
-        None => return Err("Provide port to connect to"),
-    };
-
-    Ok(Mode::Client { host, port })
-}
-
-pub fn run(mode: Mode) -> Result<(), Box<dyn Error>> {
-    match mode {
-        Mode::Server => start_server(),
-        Mode::Client { host, port } => connect_to_server(&host, &port),
+    fn to_possible_value<'a>(&self) -> Option<clap::PossibleValue<'a>> {
+        match self {
+            Self::Client => Some(clap::PossibleValue::new("client")),
+            Self::Server => Some(clap::PossibleValue::new("server")),
+        }
     }
 }
+
 
 fn handle_user_input(socket: &mut TcpStream) -> Result<(), Box<dyn Error>> {
     println!("Type a message and hit Enter to send it");
@@ -88,10 +79,7 @@ fn read_from_socket(socket: &mut TcpStream) {
     }
 }
 
-fn start_server() -> Result<(), Box<dyn Error>> {
-    let port = env::var("CHAT_PORT").unwrap_or_else(|_| String::from("6000"));
-    let host = env::var("CHAT_HOST").unwrap_or_else(|_| String::from("0.0.0.0"));
-
+pub fn start_server(host: &str, port: &str) -> Result<(), Box<dyn Error>> {
     let server = TcpListener::bind(format!("{host}:{port}"))?;
 
     println!("Started server on port {}", port);
@@ -110,7 +98,7 @@ fn start_server() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn connect_to_server(host: &str, port: &str) -> Result<(), Box<dyn Error>> {
+pub fn connect_to_server(host: &str, port: &str) -> Result<(), Box<dyn Error>> {
     let mut socket = TcpStream::connect(format!("{host}:{port}"))?;
     println!("Successfully connected to chat at {host}:{port}");
 
