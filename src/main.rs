@@ -2,9 +2,11 @@ use std::{process};
 
 use chat::{self, Mode};
 use clap::{App, Arg};
+use ockam::Context;
 
 
-fn main() {
+#[ockam::node]
+async fn main(ctx: Context) {
     let matches = App::new("P2P Chat")
         .version("0.1.0")
         .about("Simple p2p chat written in Rust")
@@ -19,7 +21,7 @@ fn main() {
             Arg::new("host")
                 .short('h')
                 .long("host")
-                .default_value("localhost")
+                .default_value("127.0.0.1")
                 .help("Host to connect to in client mode or address to bind to in server mode"),
         )
         .arg(
@@ -36,8 +38,8 @@ fn main() {
     let port: &String = matches.get_one("port").unwrap();
 
     if let Err(e) = match mode {
-        Mode::Server => chat::start_server(host, port),
-        Mode::Client => chat::connect_to_server(host, port),
+        Mode::Server => chat::start_server(host, port, ctx).await,
+        Mode::Client => chat::connect_to_server(host, port, ctx).await,
     } {
         eprintln!("Application error: {e}");
         process::exit(1);

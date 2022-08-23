@@ -1,12 +1,14 @@
+use ockam::{
+    authenticated_storage::InMemoryStorage,
+    identity::{Identity, TrustEveryonePolicy},
+    route,
+    vault::Vault,
+    Context, Result, Route, Routed, TcpTransport, Worker, TCP,
+};
 use std::{
     error::Error,
-    io::{stdin, stdout, ErrorKind, Read, Write},
-    net::{TcpListener, TcpStream},
-    process, thread,
-    time::Duration,
+    io::{stdin, stdout, Write},
 };
-
-const MSG_SIZE: usize = 256;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -27,27 +29,87 @@ impl clap::ValueEnum for Mode {
     }
 }
 
+pub struct ClientWorker;
 
-fn handle_user_input(socket: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-    println!("Type a message and hit Enter to send it");
+#[ockam::worker]
+impl Worker for ClientWorker {
+    type Context = Context;
+    type Message = String;
 
-    loop {
+    async fn handle_message(&mut self, _: &mut Context, msg: Routed<String>) -> Result<()> {
+        println!();
+        println!("chat: {}", msg.body());
         print!("message: ");
-        stdout().flush()?;
-        let msg = get_input();
-
-        if msg == ":quit" {
-            println!("Bye Bye!");
-            break;
-        }
-
-        let mut buff = msg.clone().into_bytes();
-        buff.resize(MSG_SIZE, 0);
-
-        socket.write_all(&buff)?;
+        stdout().flush().expect("Stdout error");
+        Ok(())
     }
+}
 
-    Ok(())
+pub struct ServerWorker {
+    started_sender: bool,
+}
+
+impl Default for ServerWorker {
+    fn default() -> Self {
+        ServerWorker {
+            started_sender: false,
+        }
+    }
+}
+
+pub struct ServerSenderWorker {
+    route: Route,
+}
+
+#[ockam::worker]
+impl Worker for ServerSenderWorker {
+    type Context = Context;
+    type Message = String;
+
+    async fn initialize(&mut self, ctx: &mut Self::Context) -> Result<()> {
+        println!("Type a message and hit Enter to send it");
+        loop {
+            print!("message: ");
+            stdout().flush().expect("Stdout error");
+            let msg = get_input();
+
+            if msg == ":quit" {
+                println!("Bye Bye!");
+                return ctx.stop().await;
+            } else {
+                ctx.send(self.route.clone(), msg).await?;
+            }
+        }
+    }
+}
+
+#[ockam::worker]
+impl Worker for ServerWorker {
+    type Context = Context;
+    type Message = String;
+
+    async fn handle_message(&mut self, ctx: &mut Context, msg: Routed<String>) -> Result<()> {
+        if !self.started_sender {
+            self.started_sender = true;
+            let mut message = msg.into_local_message();
+            let transport_message = message.transport_mut();
+
+            let address = transport_message.return_route.next()?;
+            ctx.start_worker(
+                "sender",
+                ServerSenderWorker {
+                    route: route![address.clone(), "worker"],
+                },
+            )
+            .await?;
+        } else {
+            println!();
+            println!("chat: {}", msg.body());
+            print!("message: ");
+            stdout().flush().expect("Stdout error");
+        }
+        Ok(())
+    }
 }
 
 fn get_input() -> String {
@@ -60,60 +122,71 @@ fn get_input() -> String {
     buff.trim().to_string()
 }
 
-fn read_from_socket(socket: &mut TcpStream) {
-    loop {
-        let mut buff = vec![0; MSG_SIZE];
+pub async fn start_server(host: &str, port: &str, ctx: Context) -> Result<(), Box<dyn Error>> {
+    ctx.start_worker(
+        "foobar",
+        ServerWorker {
+            ..Default::default()
+        },
+    )
+    .await?;
 
-        match socket.read_exact(&mut buff) {
-            Ok(_) => {
-                let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
-                let msg = String::from_utf8(msg).expect("Invalid utf8 message");
-                println!();
-                println!("chat: {}", msg);
-                print!("message: ");
-                stdout().flush().expect("Stdout error");
-            }
-            Err(err) if err.kind() == ErrorKind::WouldBlock => (),
-            Err(_) => {
-                println!("Chat session has been terminated");
-                process::exit(0);
-            }
-        }
+    let tcp = TcpTransport::create(&ctx).await?;
 
-        thread::sleep(Duration::from_millis(100));
-    }
-}
+    tcp.listen(format!("{host}:{port}")).await?;
 
-pub fn start_server(host: &str, port: &str) -> Result<(), Box<dyn Error>> {
-    let server = TcpListener::bind(format!("{host}:{port}"))?;
+    let vault = Vault::create();
 
-    println!("Started server on port {}", port);
-    println!("Waiting for chat mate...");
+    let identity = Identity::create(&ctx, &vault).await?;
 
-    if let Ok((mut socket, addr)) = server.accept() {
-        println!("Client {addr} connected");
+    let storage = InMemoryStorage::new();
 
-        let mut client = socket.try_clone()?;
-
-        thread::spawn(move || read_from_socket(&mut socket));
-
-        handle_user_input(&mut client)?
-    }
+    identity
+        .create_secure_channel_listener("server", TrustEveryonePolicy, &storage)
+        .await?;
 
     Ok(())
 }
 
-pub fn connect_to_server(host: &str, port: &str) -> Result<(), Box<dyn Error>> {
-    let mut socket = TcpStream::connect(format!("{host}:{port}"))?;
-    println!("Successfully connected to chat at {host}:{port}");
+pub async fn connect_to_server(
+    host: &str,
+    port: &str,
+    mut ctx: Context,
+) -> Result<(), Box<dyn Error>> {
+    TcpTransport::create(&ctx).await?;
 
-    socket.set_nonblocking(true)?;
+    let vault = Vault::create();
 
-    let mut client = socket.try_clone()?;
+    let identity = Identity::create(&ctx, &vault).await?;
 
-    thread::spawn(move || read_from_socket(&mut socket));
+    let storage = InMemoryStorage::new();
 
-    handle_user_input(&mut client)?;
+    let route = route![(TCP, format!("{host}:{port}")), "server"];
+
+    ctx.start_worker("worker", ClientWorker).await?;
+
+    let channel = identity
+        .create_secure_channel(route, TrustEveryonePolicy, &storage)
+        .await?;
+
+    let route = route![channel, "foobar"];
+
+    ctx.send(route.clone(), "Hello Ockam!".to_string()).await?;
+
+    println!("Type a message and hit Enter to send it");
+    loop {
+        print!("message: ");
+        stdout().flush()?;
+        let msg = get_input();
+
+        if msg == ":quit" {
+            println!("Bye Bye!");
+            ctx.stop().await?;
+            break;
+        } else {
+            ctx.send(route.clone(), msg).await?;
+        }
+    }
 
     Ok(())
 }
