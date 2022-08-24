@@ -3,7 +3,7 @@ use ockam::{
     identity::{Identity, TrustEveryonePolicy},
     route,
     vault::Vault,
-    Context, Result, Route, Routed, TcpTransport, Worker, TCP,
+    Address, Context, Result, Route, Routed, TcpTransport, Worker, TCP,
 };
 use std::{
     error::Error,
@@ -36,7 +36,9 @@ impl Worker for ClientWorker {
     type Context = Context;
     type Message = String;
 
-    async fn handle_message(&mut self, _: &mut Context, msg: Routed<String>) -> Result<()> {
+    async fn handle_message(&mut self, ctx: &mut Context, msg: Routed<String>) -> Result<()> {
+        let return_route = msg.return_route().clone();
+        ctx.send(return_route, "Ok".to_string()).await?;
         println!();
         println!("chat: {}", msg.body());
         print!("message: ");
@@ -47,18 +49,21 @@ impl Worker for ClientWorker {
 
 pub struct ServerWorker {
     started_sender: bool,
+    parent_address: Address,
 }
 
 impl Default for ServerWorker {
     fn default() -> Self {
         ServerWorker {
             started_sender: false,
+            parent_address: Address::random_local(),
         }
     }
 }
 
 pub struct ServerSenderWorker {
     route: Route,
+    parent_address: Address,
 }
 
 #[ockam::worker]
@@ -74,12 +79,16 @@ impl Worker for ServerSenderWorker {
             let msg = get_input();
 
             if msg == ":quit" {
-                println!("Bye Bye!");
-                return ctx.stop().await;
+                self.shutdown(ctx).await?;
+                ctx.send(route![self.parent_address.clone()], ":quit".to_string())
+                    .await?;
+                break;
             } else {
                 ctx.send(self.route.clone(), msg).await?;
+                ctx.receive::<String>().await?;
             }
         }
+        Ok(())
     }
 }
 
@@ -89,6 +98,9 @@ impl Worker for ServerWorker {
     type Message = String;
 
     async fn handle_message(&mut self, ctx: &mut Context, msg: Routed<String>) -> Result<()> {
+        let return_route = msg.return_route().clone();
+        ctx.send(return_route, "Ok".to_string()).await?;
+
         if !self.started_sender {
             self.started_sender = true;
             let mut message = msg.into_local_message();
@@ -96,9 +108,10 @@ impl Worker for ServerWorker {
 
             let address = transport_message.return_route.next()?;
             ctx.start_worker(
-                "sender",
+                "server_sender_worker",
                 ServerSenderWorker {
-                    route: route![address.clone(), "worker"],
+                    parent_address: self.parent_address.clone(),
+                    route: route![address.clone(), "client_worker"],
                 },
             )
             .await?;
@@ -122,10 +135,11 @@ fn get_input() -> String {
     buff.trim().to_string()
 }
 
-pub async fn start_server(host: &str, port: &str, ctx: Context) -> Result<(), Box<dyn Error>> {
+pub async fn start_server(host: &str, port: &str, mut ctx: Context) -> Result<(), Box<dyn Error>> {
     ctx.start_worker(
-        "foobar",
+        "server_worker",
         ServerWorker {
+            parent_address: ctx.address(),
             ..Default::default()
         },
     )
@@ -145,6 +159,16 @@ pub async fn start_server(host: &str, port: &str, ctx: Context) -> Result<(), Bo
         .create_secure_channel_listener("server", TrustEveryonePolicy, &storage)
         .await?;
 
+    println!("Started server on port {}", port);
+    println!("Waiting for chat mate...");
+
+    let reply = ctx.receive::<String>().await?;
+    if reply == ":quit".to_string() {
+        println!("Bye Bye!");
+        ctx.stop_worker("server_worker").await?;
+        ctx.stop().await?;
+    }
+
     Ok(())
 }
 
@@ -163,15 +187,19 @@ pub async fn connect_to_server(
 
     let route = route![(TCP, format!("{host}:{port}")), "server"];
 
-    ctx.start_worker("worker", ClientWorker).await?;
+    ctx.start_worker("client_worker", ClientWorker).await?;
 
     let channel = identity
         .create_secure_channel(route, TrustEveryonePolicy, &storage)
         .await?;
 
-    let route = route![channel, "foobar"];
+    println!("Successfully connected to chat at {host}:{port}");
+
+    let route = route![channel.clone(), "server_worker"];
 
     ctx.send(route.clone(), "Hello Ockam!".to_string()).await?;
+
+    ctx.receive::<String>().await?;
 
     println!("Type a message and hit Enter to send it");
     loop {
@@ -181,10 +209,12 @@ pub async fn connect_to_server(
 
         if msg == ":quit" {
             println!("Bye Bye!");
+            ctx.stop_worker("client_worker").await?;
             ctx.stop().await?;
             break;
         } else {
             ctx.send(route.clone(), msg).await?;
+            ctx.receive::<String>().await?;
         }
     }
 
