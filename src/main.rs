@@ -4,6 +4,7 @@ use clap::{App, Arg};
 
 pub mod ockam_chat;
 pub mod tcp_chat;
+pub mod udp_chat;
 
 fn main() {
     let matches = App::new("P2P Chat")
@@ -28,7 +29,7 @@ fn main() {
     let host: &String = matches.get_one("host").unwrap();
     let port: &String = matches.get_one("port").unwrap();
 
-    if let Err(e) = tcp_chat::run(host, port) {
+    if let Err(e) = udp_chat::run(host, port) {
         eprintln!("Application error: {e}");
         process::exit(1);
     }
