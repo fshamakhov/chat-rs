@@ -5,6 +5,7 @@ use clap::{App, Arg};
 pub mod ockam_chat;
 pub mod tcp_chat;
 pub mod udp_chat;
+pub mod sodium;
 
 fn main() {
     let matches = App::new("P2P Chat")

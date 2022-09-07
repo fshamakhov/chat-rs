@@ -9,3 +9,6 @@ edition = "2021"
 clap = "3.2.17"
 ockam = "0.70.0"
 tracing = { version = "0.1", features = ["max_level_debug", "release_max_level_off"] }
+libsodium-sys-stable = "1.19.22"
+libc = "0.2.0"
+bytelines = "2.4.0"
