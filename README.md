@@ -12,8 +12,8 @@ cargo run
 cargo run -- --help
 ```
 
-## Connect to session
+## Start (Connect to) session
 
 ```sh
-cargo run -- -m client
+cargo run
 ```
