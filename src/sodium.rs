@@ -5,9 +5,9 @@ use libsodium_sys::{
 };
 
 pub const PUBLIC_KEY_BYTES: usize = crypto_box_PUBLICKEYBYTES as usize;
-const SECRET_KEY_BYTES: usize = crypto_box_SECRETKEYBYTES as usize;
+pub const SECRET_KEY_BYTES: usize = crypto_box_SECRETKEYBYTES as usize;
+pub const NONCE_BYTES: usize = crypto_box_NONCEBYTES as usize;
 const MAC_BYTES: usize = crypto_box_MACBYTES as usize;
-const NONCE_BYTES: usize = crypto_box_NONCEBYTES as usize;
 
 pub struct PublicKey([u8; PUBLIC_KEY_BYTES]);
 
@@ -24,7 +24,14 @@ impl PublicKey {
 pub struct SecretKey([u8; SECRET_KEY_BYTES]);
 
 impl SecretKey {
-    /// `public_key()` computes the corresponding public key for a given secret key
+    pub fn key(&self) -> &[u8; SECRET_KEY_BYTES] {
+        return &self.0;
+    }
+
+    pub fn new(k: [u8; SECRET_KEY_BYTES]) -> Self {
+        Self(k)
+    }
+
     pub fn public_key(&self) -> PublicKey {
         let mut pk = PublicKey([0u8; PUBLIC_KEY_BYTES]);
 
@@ -37,6 +44,16 @@ impl SecretKey {
 }
 
 pub struct Nonce([u8; NONCE_BYTES]);
+
+impl Nonce {
+    pub fn new(n: [u8; NONCE_BYTES]) -> Self {
+        Self(n)
+    }
+
+    pub fn value(&self) -> &[u8; NONCE_BYTES] {
+        &self.0
+    }
+}
 
 pub fn init() {
     unsafe {
